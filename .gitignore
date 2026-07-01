@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual env
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Browser data (Playwright)
+browser_data/
+
+# Config (contains user token)
+jiudou_config.json
+
+# Temp files
+*.network-response
+*.json
+!cookies.json
+!requirements.txt
+
+# Package
+九斗自动答题.zip
+package/
+fuckZHS_ref/
