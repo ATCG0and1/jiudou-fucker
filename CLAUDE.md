@@ -1,76 +1,96 @@
-# 九斗 fucker
+# 九斗平台自动答题脚本
 
-jiudou123.com 网安大作业，自动搞定 18 个单元课后题。
+jiudou123.com 课后习题自动答题，网络安全课程项目。
 
-## 怎么发现的
+## 漏洞
 
-瞎试的时候发现 `exercisesInfo` 这个接口在还没提交的情况下，直接把答案扔在 `sonSubList[].answer` 里返回了。离谱。所以根本不需要什么浏览器模拟、空提交再撤回那套，直接 http 请求就完事。
+`exercisesInfo` 接口在用户未提交状态下就把正确答案放在 `sonSubList[].answer` 字段里返回了。纯 HTTP 请求就能拿到所有答案，不需要浏览器模拟、不需要先空提交再看答案那一套。
 
-## 接口
+## API
 
-全在 `api.guangyiedu.com/v3/`，所有请求都得带 `client=4&token=xxx&uid=xxx`，格式是 `application/x-www-form-urlencoded`。
+基地址 `https://api.guangyiedu.com/v3/`，所有请求都要带 `client=4&token={token}&uid={uid}`，Content-Type 是 `application/x-www-form-urlencoded`。
 
-### 拿单元列表
+### 获取单元列表
+
 ```
 POST /v3/clazz/exercise/stu/exercisesPage
-page=1&pagesize=50&client=4&token=&uid=
+参数: page, pagesize, client, token, uid
 ```
-返回 `data.data[]`，每个有 `exercisesId`、`exercisesName`、`status`（0 就是没做）
 
-### 拿题目和答案（这个就是漏洞接口）
+返回 `data.data[]`，关注 `exercisesId`、`exercisesName`、`status`（0=未完成）。
+
+### 获取题目和答案
+
 ```
 POST /v3/tiku/exerciseStu/exercisesInfo
-exerciseId=&client=4&token=&uid=
+参数: exerciseId, client, token, uid
 ```
-返回 `data.subjects[]`：
-- `tSubject` 题型：1 单选 2 多选 4 填空 5 问答 11 组合题 14 判断
-- `sonSubList[].answer` 正确答案就在这，有的会用 `^*` 隔开多个可接受答案
-- `analyse` 是解析，html 格式的，正确答案用 `<u>` 包的
 
-### 提交
+返回 `data.subjects[]`，每个题目：
+
+| 字段 | 说明 |
+|------|------|
+| `tSubject` | 1=单选, 2=多选, 4=填空, 5=问答, 11=组合题, 14=判断 |
+| `sonSubList[].answer` | 正确答案，多答案用 `^*` 分隔 |
+| `analyse` | 解析，HTML 格式，正确答案在 `<u>` 标签里 |
+| `answers[]` | 选择题的选项列表，`isCorrect`=2 表示正确 |
+
+### 提交答案
+
 ```
 POST /v3/tiku/exerciseStu/commitAnswer
-exerciseId=&answers=<json>&client=4&token=&uid=
+参数: exerciseId, answers(JSON字符串), client, token, uid
 ```
-answers 大概长这样：
+
+answers JSON 示例：
+
 ```json
 [
   {"lang":"","subjectId":"292353"},
   {"lang":"","subjectId":"292354","stuAnswer":"host countries"},
-  ...
+  {"lang":"","subjectId":"292365","stuAnswer":"A"}
 ]
 ```
-组合题的父题不传 stuAnswer，只传子题的。返回 `code:200 msg:"提交成功"` 就行。如果返回"已经提交过了"得先调撤回。
+
+组合题的父题（tSubject=11）只有 `subjectId`，不传 `stuAnswer`。子题带答案，填空传文字，选择传字母。
+
+返回 `code:200 msg:"提交成功"` 表示成功。返回"已经提交过了"说明需要先撤回。
 
 ### 撤回
+
 ```
 POST /v3/tiku/v4/exerciseStu/withdraw
-exercisesId=&client=4&token=&uid=
+参数: exercisesId, client, token, uid
 ```
 
-## 踩过的坑
+## 两个脚本
 
-- jiudou123.com 是个 Vue SPA，直接 http 请求拿到的就是个空壳，数据都是 api.guangyiedu.com 给的
-- 九斗是光一教育的子品牌，所以 api 域名是 guangyiedu
-- chunk.js 有 2.2MB 但那是 ECharts 和 ElementUI，真正业务代码在 webpack 动态加载的分块里
-- Windows 终端编码是 gbk，脚本开头一定要 utf-8 wrapper
-- "已经提交过了"返回的不是 200，要单独处理
-- tSubject=2 的选择题，`answers[].isCorrect` 里 2 才是对的（1 是错的），看 `answer` 字段更直接
-- tSubject=5 的问答，`answer` 是一大坨 html，有 `<p>` `<span>` 什么的，还带个 "Reference answer:" 前缀，要 strip 掉
-- 服务器处理 json 里 `\n` 转义有 bug，所以问答答案只能搞成单行纯文本提交，不能带换行
+`jiudou_auto.py` —— 给同学用的，Playwright 自动打开浏览器登录，提取 cookie 后全自动完成。依赖虚拟环境 + 国内镜像，启动.bat 一键搞定。
 
-## 脚本怎么跑
+`jiudou_fucker.py` —— 自己调试用的，手动传 token 和 uid，不走浏览器。
+
+## 注意事项
+
+- jiudou123.com 是 Vue SPA，直接抓页面只能拿到空壳。数据都在 api.guangyiedu.com
+- 九斗是光一教育的子品牌，所以 API 域名是 guangyiedu
+- chunk.js 有 2.2MB，那是 ECharts 和 ElementUI 的库，业务代码在 webpack 按需加载的模块里（比如 7666.myCourse.js）
+- Windows 终端默认编码是 GBK，脚本要在最前面把 stdout 包成 UTF-8
+- "已经提交过了"返回的 code 不是 200，要单独 catch 然后调撤回再重试
+- tSubject=5 的问答，answer 是一大段 HTML（`<p>`、`<span>` 什么的），前面还带 "Reference answer:"，需要 strip 掉标签和前缀
+- 服务器对 JSON 里 `\n` 转义的处理有 bug，问答答案只能提交纯单行文本，不能带换行符
+
+## 用法
 
 ```powershell
-# 自动模式（推荐给同学用）
-双击启动.bat  # 自动装 venv + 开浏览器登录
+# 自动模式
+双击 启动.bat
 
 # 手动模式
 python jiudou_fucker.py --token "xxx" --uid 1234567
-python jiudou_fucker.py --token "xxx" --uid 1234567 --force  # 强行全部重做
-python jiudou_fucker.py --withdraw-only 24511 --token "xxx" --uid 1234567  # 撤回
+python jiudou_fucker.py --token "xxx" --uid 1234567 --force
+python jiudou_fucker.py --withdraw-only 24511 --token "xxx" --uid 1234567
 ```
 
-## token 怎么拿
+## 获取 token
 
-登录 jiudou123.com → F12 → Application → Cookies → 找到 token 这个 cookie，还有 stu_info 里面 url decode 之后有 uid
+登录 jiudou123.com → F12 → Application → Cookies → 找 `token` 这个 cookie。`stu_info` URL decode 之后有 uid。
