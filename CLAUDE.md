@@ -1,160 +1,76 @@
-# 九斗平台自动答题脚本 (jiudou_fucker)
+# 九斗 fucker
 
-## 项目概述
+jiudou123.com 网安大作业，自动搞定 18 个单元课后题。
 
-jiudou123.com 网络安全大作业 —— 自动化完成九斗平台 18 个单元的课后习题。
+## 怎么发现的
 
-## 核心发现
+瞎试的时候发现 `exercisesInfo` 这个接口在还没提交的情况下，直接把答案扔在 `sonSubList[].answer` 里返回了。离谱。所以根本不需要什么浏览器模拟、空提交再撤回那套，直接 http 请求就完事。
 
-**API 泄露漏洞：`exercisesInfo` 接口在未提交状态下直接将正确答案放在 `sonSubList[].answer` 字段返回。** 因此完全不需要浏览器自动化或"空提交→解析→撤回"流程，纯 HTTP API 即可完成所有答题。
+## 接口
 
-## API 文档
+全在 `api.guangyiedu.com/v3/`，所有请求都得带 `client=4&token=xxx&uid=xxx`，格式是 `application/x-www-form-urlencoded`。
 
-### 基础信息
-
-- **前端**: `https://www.jiudou123.com` (Vue SPA)
-- **API 基地址**: `https://api.guangyiedu.com/v3/`
-- **认证方式**: Cookie `token` + `uid` 作为请求参数
-- **请求格式**: `application/x-www-form-urlencoded;charset=UTF-8`
-- **公共参数**: 所有请求必须带 `client=4&token={token}&uid={uid}`
-
-### 接口列表
-
-#### 1. 获取单元列表
+### 拿单元列表
 ```
 POST /v3/clazz/exercise/stu/exercisesPage
-Body: page=1&pagesize=50&client=4&token=xxx&uid=xxx
+page=1&pagesize=50&client=4&token=&uid=
 ```
-返回 `data.data[]` 数组，每个元素：
-- `exercisesId`: 习题模板ID（用于后续接口）
-- `exercisesName`: 单元名称如 "《军事英语》Unit 19"
-- `status`: 0=未完成, 非0=已完成
-- `classId`, `id`: 其他标识
+返回 `data.data[]`，每个有 `exercisesId`、`exercisesName`、`status`（0 就是没做）
 
-#### 2. 获取题目和答案（核心接口）
+### 拿题目和答案（这个就是漏洞接口）
 ```
 POST /v3/tiku/exerciseStu/exercisesInfo
-Body: exerciseId={exercisesId}&client=4&token=xxx&uid=xxx
+exerciseId=&client=4&token=&uid=
 ```
-返回 `data.subjects[]` 数组，每个题目包含：
-- `subjectId`: 题目ID
-- `tSubject`: 题型（1=单选, 2=多选, 4=填空, 11=组合题, 14=判断）
-- `parentId`: 父题ID（"0"=顶级题）
-- `status`: 0=待答, 2=已答对, 3=未答, 4=部分作答
-- `answer`: 正确答案（非组合题）
-- `sonSubList[]`: 子题列表（组合题的子题或填空题的每个空）
-  - `subjectId`: 子题ID
-  - `answer`: **正确答案！**（多答案用 `^*` 分隔，如 "Secretary General^*Secretary-General"）
-  - `tSubject`: 4=填空题, 选择题型(A/B/C/D)
-- `analyse`: 解析（HTML格式，答案用 `<u>` 标签标注）
-- `score`: 分值
+返回 `data.subjects[]`：
+- `tSubject` 题型：1 单选 2 多选 4 填空 5 问答 11 组合题 14 判断
+- `sonSubList[].answer` 正确答案就在这，有的会用 `^*` 隔开多个可接受答案
+- `analyse` 是解析，html 格式的，正确答案用 `<u>` 包的
 
-#### 3. 提交答案
+### 提交
 ```
 POST /v3/tiku/exerciseStu/commitAnswer
-Body: answers={URL-encoded JSON}&exerciseId=xxx&client=4&token=xxx&uid=xxx
+exerciseId=&answers=<json>&client=4&token=&uid=
 ```
-`answers` JSON 格式:
+answers 大概长这样：
 ```json
 [
-  {"lang":"","subjectId":"292353"},           // 组合题父题，无 stuAnswer
-  {"lang":"","subjectId":"292354","stuAnswer":"host countries"},  // 子题
-  {"lang":"","subjectId":"292355","stuAnswer":"legitimacy"},
-  ...
-  {"lang":"","subjectId":"292364"},           // 下一个组合题的父题
-  {"lang":"","subjectId":"292365","stuAnswer":"A"},
+  {"lang":"","subjectId":"292353"},
+  {"lang":"","subjectId":"292354","stuAnswer":"host countries"},
   ...
 ]
 ```
-- 父题（tSubject=11）：只有 `subjectId`，没有 `stuAnswer`
-- 子题：`subjectId` + `stuAnswer`（填文字或 A/B/C/D）
-- 返回 `{"code":200,"msg":"提交成功"}` 表示成功
-- 返回 `"已经提交过了"` 表示需先撤回
+组合题的父题不传 stuAnswer，只传子题的。返回 `code:200 msg:"提交成功"` 就行。如果返回"已经提交过了"得先调撤回。
 
-#### 4. 撤回提交
+### 撤回
 ```
 POST /v3/tiku/v4/exerciseStu/withdraw
-Body: exercisesId={exercisesId}&client=4&token=xxx&uid=xxx
-```
-撤回后状态回到"未答"，可重新提交。
-
-### 题型映射
-
-| tSubject | 类型 | stuAnswer 格式 | 备注 |
-|----------|------|---------------|------|
-| 1 | 单选题 | "A" | |
-| 2 | 多选题/判断题 | "A,B" 或 "A" | T/F题选项为A/B |
-| 4 | 填空题 | "答案文字" | |
-| 5 | 问答题 | 纯文本（剥HTML后） | answer 字段含完整 HTML 范文，需 strip |
-| 11 | 组合题 | 无（通过子题提交） | 子题 tSubject=2/4 |
-| 14 | 判断题 | "1" 或 "0" | |
-
-### 关键陷阱
-- **tSubject=5 的 answer 是 HTML**：`<p style="..."><span>Reference answer: ...</span></p>`，必须 strip HTML 标签后再提交
-- **isCorrect=2 才是正确答案**：`answers[].isCorrect` 中 1=错, 2=对
-- **多可接受答案用 `^*` 分隔**：如 `"Secretary General^*Secretary-General"`
-
-### answer 字段格式
-- 单答案: `"host countries"`
-- 多可接受答案: `"Secretary General^*Secretary-General"` （`^*` 分隔，取第一个即可）
-
-## 脚本架构
-
-### 文件
-- `jiudou_fucker.py` —— 主脚本
-
-### 数据结构
-```
-Exercise (单元)
-  ├── exercises_id, name, status
-  └── questions: List[Question]
-
-Question (题目)
-  ├── subject_id, t_subject, title, score, status, answer
-  └── son_sub_list: List[SubQuestion]
-
-SubQuestion (子题/填空)
-  ├── subject_id, answer, status
-  └── get_best_answer() → 取 ^* 分隔的第一个答案
+exercisesId=&client=4&token=&uid=
 ```
 
-### 控制流
-```
-fuck_all()
-  → get_exercise_list()        # 获取所有单元
-  → for each exercise:
-      fuck_exercise(exercises_id)
-        → get_exercise_info()   # 获取题目+答案
-        → submit_answers()      # 构造JSON提交
-          → 如果"已经提交过" → withdraw() → 重新 submit_answers()
-```
+## 踩过的坑
 
-### 使用
+- jiudou123.com 是个 Vue SPA，直接 http 请求拿到的就是个空壳，数据都是 api.guangyiedu.com 给的
+- 九斗是光一教育的子品牌，所以 api 域名是 guangyiedu
+- chunk.js 有 2.2MB 但那是 ECharts 和 ElementUI，真正业务代码在 webpack 动态加载的分块里
+- Windows 终端编码是 gbk，脚本开头一定要 utf-8 wrapper
+- "已经提交过了"返回的不是 200，要单独处理
+- tSubject=2 的选择题，`answers[].isCorrect` 里 2 才是对的（1 是错的），看 `answer` 字段更直接
+- tSubject=5 的问答，`answer` 是一大坨 html，有 `<p>` `<span>` 什么的，还带个 "Reference answer:" 前缀，要 strip 掉
+- 服务器处理 json 里 `\n` 转义有 bug，所以问答答案只能搞成单行纯文本提交，不能带换行
+
+## 脚本怎么跑
+
 ```powershell
-# 完成所有单元
+# 自动模式（推荐给同学用）
+双击启动.bat  # 自动装 venv + 开浏览器登录
+
+# 手动模式
 python jiudou_fucker.py --token "xxx" --uid 1234567
-
-# 只做指定单元
-python jiudou_fucker.py --exercise-id 24511 --token "xxx" --uid 1234567
-
-# 强制重做已完成单元
-python jiudou_fucker.py --token "xxx" --uid 1234567 --force
-
-# 撤回指定单元
-python jiudou_fucker.py --withdraw-only 24511 --token "xxx" --uid 1234567
+python jiudou_fucker.py --token "xxx" --uid 1234567 --force  # 强行全部重做
+python jiudou_fucker.py --withdraw-only 24511 --token "xxx" --uid 1234567  # 撤回
 ```
 
-### 获取 token 和 uid
-1. 登录 https://www.jiudou123.com
-2. F12 → Application → Cookies → www.jiudou123.com
-3. `token` → Cookie 值
-4. `stu_info` → URL decode → JSON 中的 `uid` 字段
+## token 怎么拿
 
-## 踩坑记录
-
-1. **不要用 WebFetch 或 HTTP 直接请求 jiudou123.com** —— 返回的是 Vue SPA 空壳，实际数据通过 api.guangyiedu.com 获取
-2. **不要用 Bash** —— Windows 环境，统一用 PowerShell
-3. **Windows 控制台编码** —— 需要在脚本开头设置 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')`
-4. **"已经提交过了" 是 code!=200 的错误响应** —— 需要特殊处理，先撤回再重提
-5. **API 域名是 api.guangyiedu.com（光一教育）** —— 九斗是光一教育的子品牌
-6. **JS 文件混淆** —— chunk.js 2.2MB 是 ECharts/ElementUI 库，业务代码在 webpack 分块加载的页面模块中（如 7666.myCourse.js）
+登录 jiudou123.com → F12 → Application → Cookies → 找到 token 这个 cookie，还有 stu_info 里面 url decode 之后有 uid
